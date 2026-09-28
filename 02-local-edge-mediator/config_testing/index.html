@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SYSCOM Edge · Panel de Calibración y Testing</title>
+<style>
+:root{--navy:#0f2a4a;--navy2:#0b1f38;--bg:#f4f6f8;--line:#dfe6ec;--accent:#ffb800;--accent2:#ff6a00;--ok:#1f9d55;--err:#d64545}
+*{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,Roboto,Arial,sans-serif;background:var(--bg);color:#1c2733}
+header{background:linear-gradient(180deg,var(--navy),var(--navy2));color:#fff;padding:14px 20px}
+header .wrap{max-width:1080px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.badge{background:var(--accent);color:#231600;font-weight:800;border-radius:8px;padding:2px 10px;font-size:12px}
+main{max-width:1080px;margin:20px auto;padding:0 20px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 6px 24px rgba(15,42,74,.08)}
+.card h2{margin:0 0 4px;color:var(--navy);font-size:16px}
+.card p.sub{margin:0 0 12px;color:#5b6b7c;font-size:13px}
+label{font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.4px}
+input[type=number],input[type=text]{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;margin:4px 0 10px}
+input[type=range]{width:100%}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+button{border:none;border-radius:8px;padding:11px 16px;font-weight:800;font-size:13.5px;cursor:pointer}
+.btn-p{background:linear-gradient(180deg,var(--accent),var(--accent2));color:#231600}
+.btn-n{background:var(--navy);color:#fff}
+.btn-g{background:#eef2f6;color:var(--navy);border:1px solid var(--line)}
+pre{background:var(--navy2);color:#c8f5d4;padding:12px;border-radius:8px;font-size:12px;overflow:auto;max-height:300px}
+.pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.pill.ok{background:#e6f7ec;color:#14532d}.pill.bad{background:#fdecec;color:#7a1f1f}.pill.idle{background:#eef2f6;color:#42546a}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+canvas{width:100%;height:150px;background:#0b1f38;border-radius:8px}
+.log{font-size:12px;color:#5b6b7c}
+footer{text-align:center;color:#8a99a8;font-size:12px;padding:16px}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div><strong>SYSCOM Edge Controller</strong> <span class="badge">LOCAL · :8000</span><br>
+  <small>Panel de pruebas y calibración — Cámara 3D + Báscula RS232</small></div>
+  <div><span class="pill idle" id="pill">verificando…</span></div>
+</div></header>
+
+<main>
+  <section class="card">
+    <h2>1 · Cámara 3D — lectura y calibración</h2>
+    <p class="sub">Simula la nube de puntos → L×W×H. Ajusta el offset del plano (mesa/conveyor).</p>
+    <div class="grid2">
+      <div><label>Offset altura / plano (cm)</label><input type="range" id="offH" min="-10" max="10" step="0.1" value="0"><input type="number" id="offHn" step="0.1" value="0"></div>
+      <div><label>Offset largo (cm)</label><input type="range" id="offL" min="-10" max="10" step="0.1" value="0"><input type="number" id="offLn" step="0.1" value="0"></div>
+      <div><label>Offset ancho (cm)</label><input type="range" id="offW" min="-10" max="10" step="0.1" value="0"><input type="number" id="offWn" step="0.1" value="0"></div>
+      <div><label>Inclinación plano (°)</label><input type="number" id="tilt" step="0.1" value="0"></div>
+    </div>
+    <div class="row">
+      <button class="btn-n" id="btnCal">Aplicar calibración</button>
+      <button class="btn-g" id="btnSim">Simular lectura 3D</button>
+      <button class="btn-p" id="btnFull">Captura fusionada</button>
+    </div>
+    <p class="log">Tip: sube el offset de altura +2 cm si la mesa reporta cajas “más bajas” de lo real.</p>
+    <canvas id="box3d" width="480" height="150"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>2 · Báscula serie — enlace y tara</h2>
+    <p class="sub">Mock RS232 (<code id="portLbl">COM3@9600</code>). En producción cambia <code>SCALE_PORT</code> y <code>SCALE_MOCK=0</code>.</p>
+    <div class="row">
+      <button class="btn-n" id="btnCheck">Verificar conexión serie</button>
+      <button class="btn-g" id="btnTare">Tara (cero)</button>
+    </div>
+    <h2 style="margin-top:14px">3 · Salida JSON</h2>
+    <pre id="out">{"tip": "presiona Captura fusionada"}</pre>
+  </section>
+</main>
+<footer>Edge Mediator · <a href="/health">/health</a> · <a href="/docs">/docs (Swagger)</a> · ERP → <code>POST /capturar</code></footer>
+
+<script>
+const API = location.origin;
+const $ = id => document.getElementById(id);
+const out = $('out'), pill = $('pill');
+
+async function health(){
+  try{ const r = await fetch(API+'/health'); const d = await r.json();
+    pill.className='pill ok'; pill.textContent='edge OK · mock '+(d.bascula_mock?'ON':'OFF');
+    $('portLbl').textContent=(d.calibracion?'calibrado':'');
+    if(d.calibracion){ $('offH').value=$('offHn').value=d.calibracion.height_offset_cm;
+      $('offL').value=$('offLn').value=d.calibracion.length_offset_cm;
+      $('offW').value=$('offWn').value=d.calibracion.width_offset_cm; }
+  }catch{ pill.className='pill bad'; pill.textContent='edge caído'; }
+}
+function sync(a,b){ $(a).addEventListener('input',()=>$(b).value=$(a).value); $(b).addEventListener('input',()=>$(a).value=$(b).value); }
+sync('offH','offHn'); sync('offL','offLn'); sync('offW','offWn');
+
+$('btnCal').onclick = async ()=>{
+  const body={height_offset_cm:+$('offHn').value,length_offset_cm:+$('offLn').value,width_offset_cm:+$('offWn').value,plane_tilt_deg:+$('tilt').value};
+  const r=await fetch(API+'/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  out.textContent=JSON.stringify(await r.json(),null,2);
+};
+$('btnSim').onclick = async ()=>{ const r=await fetch(API+'/capturar'); const d=await r.json(); draw(d); out.textContent=JSON.stringify(d,null,2); };
+$('btnFull').onclick = async ()=>{ const r=await fetch(API+'/capturar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const d=await r.json(); draw(d); out.textContent=JSON.stringify(d,null,2); };
+$('btnTare').onclick = async ()=>{ const r=await fetch(API+'/api/scale/tare',{method:'POST'}); out.textContent=JSON.stringify(await r.json(),null,2); };
+$('btnCheck').onclick = async ()=>{ const r=await fetch(API+'/api/scale/check'); const d=await r.json(); out.textContent=JSON.stringify(d,null,2); };
+
+function draw(d){ // isometría simple de la caja L×W×H
+  const c=$('box3d'),x=c.getContext('2d'); x.clearRect(0,0,c.width,c.height);
+  const s=Math.min(140/(d.largo_cm||45),70/(d.alto_cm||25),3);
+  const L=(d.largo_cm||40)*s,W=(d.ancho_cm||30)*s*0.45,H=(d.alto_cm||25)*s;
+  const ox=120,oy=120; x.strokeStyle='#ffb800'; x.fillStyle='rgba(255,184,0,.15)'; x.lineWidth=2;
+  const P=(a,b)=>[ox+a,oy-b];
+  const A=P(0,0),B=P(L,0),C=P(L,H),D=P(0,H),E=P(W*0.6,W*0.35),F=P(L+W*0.6,W*0.35),G=P(L+W*0.6,H+W*0.35),Hh=P(W*0.6,H+W*0.35);
+  x.beginPath(); x.moveTo(...A);x.lineTo(...B);x.lineTo(...C);x.lineTo(...D);x.closePath(); x.fill(); x.stroke();
+  x.beginPath(); x.moveTo(...D);x.lineTo(...Hh);x.lineTo(...G);x.lineTo(...C); x.stroke();
+  x.beginPath(); x.moveTo(...B);x.lineTo(...F);x.lineTo(...G); x.stroke();
+  x.fillStyle='#fff'; x.font='12px sans-serif';
+  x.fillText(`${d.largo_cm} cm`,ox+L/2-20,oy+14); x.fillText(`${d.alto_cm} cm`,ox+L+6,oy-H/2); x.fillText(`${d.peso_kg} kg`,ox-10,oy-H-12);
+}
+health(); setInterval(health,15000);
+</script>
+</body>
+</html>
